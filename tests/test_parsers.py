@@ -1,4 +1,5 @@
 import datetime
+import tarfile
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -672,6 +673,36 @@ def test_pressure_observations_approximation_for_zero():
         lat=50.0, lon=9.0, height=339.5)
     assert elements['pressure_msl'] is not None
     assert elements['pressure_msl'] > 0
+
+
+def test_pressure_observations_approximation_without_height():
+    """Without a station height the barometric formula cannot be evaluated,
+    so pressure_msl is left as it is."""
+    p = PressureObservationsParser()
+    elements = p.parse_elements(
+        {'   P': '0.0', '  P0': '980.9'},
+        lat=None, lon=None, height=None)
+    assert not elements['pressure_msl']
+
+
+def test_observations_parser_rejects_timestamp_before_metadata():
+    p = WindObservationsParser()
+    history = {
+        datetime.datetime(2020, 1, 1, tzinfo=utc): (50.0, 9.0, 339.5, 'X'),
+    }
+    with pytest.raises(ValueError, match="No station metadata"):
+        p._station_params(datetime.datetime(2019, 1, 1, tzinfo=utc), history)
+
+
+def test_radolan_parser_skips_non_file_tar_members(tmp_path):
+    """tarfile.extractfile returns None for members that are not regular
+    files, e.g. a directory."""
+    archive = tmp_path / 'only_a_directory.tar.bz2'
+    with tarfile.open(archive, 'w:bz2') as out:
+        info = tarfile.TarInfo('a_directory')
+        info.type = tarfile.DIRTYPE
+        out.addfile(info)
+    assert list(RADOLANParser().parse(archive)) == []
 
 
 def test_sanitize_synop_time_period_fields():
