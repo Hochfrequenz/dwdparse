@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "dwdparse"
 description = "Parsers for DWD's open weather data."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Jakob de Maeyer", email = "jakob@naboa.de" }]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -35,7 +35,7 @@ version = { attr = "dwdparse.__version__" }
 
 [tool.ruff]
 line-length = 79
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I"]
