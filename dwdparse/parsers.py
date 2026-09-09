@@ -6,12 +6,15 @@ import io
 import itertools
 import json
 import logging
+import os
 import re
 import sys
 import tarfile
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
+from typing import IO, Any, TypeVar
 
 from dwdparse.stations import (
     dwd_id_to_wmo,
@@ -34,6 +37,15 @@ from dwdparse.units import (
 )
 
 
+T = TypeVar('T')
+Record = dict[str, Any]
+StrPath = str | os.PathLike[str]
+LatLonHistory = dict[
+    datetime.datetime,
+    tuple[float, float, float, str],
+]
+
+
 class SkipRecord(Exception):
     pass
 
@@ -41,25 +53,29 @@ class SkipRecord(Exception):
 class Parser:
 
     @property
-    def logger(self):
+    def logger(self) -> logging.Logger:
         if not hasattr(self, '_logger'):
             name = __name__ + '.' + self.__class__.__name__
             self._logger = logging.getLogger(name)
         return self._logger
 
-    def parse(self, path):
+    def parse(self, path: StrPath) -> Iterator[Record]:
         raise NotImplementedError
 
-    def get_extra_urls(self, path):
+    def get_extra_urls(self, path: StrPath) -> dict[str, str]:
         return {}
 
     @staticmethod
-    def _is_tag(element, tag, ns):
+    def _is_tag(element: ET.Element, tag: str, ns: dict[str, str]) -> bool:
         prefix, tag = tag.split(':')
         return element.tag == f'{{{ns[prefix]}}}{tag}'
 
     @staticmethod
-    def _find_text(element, tag, ns):
+    def _find_text(
+        element: ET.Element,
+        tag: str,
+        ns: dict[str, str],
+    ) -> str:
         """Return the text of a required child element."""
         child = element.find(tag, ns)
         if child is None or child.text is None:
@@ -67,7 +83,7 @@ class Parser:
         return child.text
 
     @staticmethod
-    def _text(element):
+    def _text(element: ET.Element) -> str:
         """Return the text of an element, raising if it is empty."""
         if element.text is None:
             _, _, tag = element.tag.rpartition('}')
@@ -75,11 +91,11 @@ class Parser:
         return element.text
 
     @staticmethod
-    def _iso_z_to_utc(timestamp_str):
+    def _iso_z_to_utc(timestamp_str: str) -> str:
         # `datetime.fromisoformat` rejected `Z` before Python 3.11.
         return re.sub(r'Z$', '+00:00', timestamp_str)
 
-    def sanitize_record(self, record):
+    def sanitize_record(self, record: Record) -> None:
         for field, value in record.items():
             if value is None:
                 continue
@@ -90,13 +106,16 @@ class Parser:
                     field, value, fixed, record)
                 record[field] = fixed
 
-    def sanitize_records(self, records):
+    def sanitize_records(
+        self,
+        records: Iterable[Record],
+    ) -> Iterator[Record]:
         for record in records:
             self.sanitize_record(record)
             yield record
 
     @staticmethod
-    def _sanitize_value(field, value):
+    def _sanitize_value(field: str, value: Any) -> Any:
         # Strip a trailing '_<seconds>' time-period suffix (used by
         # SYNOPParser, e.g. precipitation_60) so the same rules apply to
         # both the bare and the suffixed forms.
@@ -140,7 +159,7 @@ class MOSMIXParser(Parser):
         'ww': 'condition',
     }
 
-    def parse(self, path):
+    def parse(self, path: StrPath) -> Iterator[Record]:
         self.logger.info("Parsing %s", path)
         with zipfile.ZipFile(path) as zf:
             infolist = zf.infolist()
@@ -149,7 +168,7 @@ class MOSMIXParser(Parser):
             with zf.open(infolist[0]) as f:
                 yield from self._parse_stream(f)
 
-    def _parse_stream(self, f):
+    def _parse_stream(self, f: IO[bytes]) -> Iterator[Record]:
         timestamps = None
         source = None
         ns = {}
@@ -179,13 +198,23 @@ class MOSMIXParser(Parser):
                 # XXX: Reduce memory footprint from 1 GB to 30 MB
                 element.clear()
 
-    def parse_timestamps(self, steps, ns):
+    def parse_timestamps(
+        self,
+        steps: ET.Element,
+        ns: dict[str, str],
+    ) -> list[datetime.datetime]:
         return [
             datetime.datetime.fromisoformat(self._iso_z_to_utc(self._text(el)))
             for el in steps.findall('dwd:TimeStep', ns)
         ]
 
-    def parse_station(self, place, ns, timestamps, source):
+    def parse_station(
+        self,
+        place: ET.Element,
+        ns: dict[str, str],
+        timestamps: list[datetime.datetime],
+        source: str,
+    ) -> Iterable[Record]:
         wmo_station_id = self._find_text(place, 'kml:name', ns)
         dwd_station_id = wmo_id_to_dwd(wmo_station_id)
         description = place.find('kml:description', ns)
@@ -200,7 +229,7 @@ class MOSMIXParser(Parser):
                 wmo_station_id, dwd_station_id, station_name)
             return []
         lon, lat, height = coords.text.split(',')
-        records = {'timestamp': timestamps}
+        records: dict[str, list[Any]] = {'timestamp': timestamps}
         data = place.find('kml:ExtendedData', ns)
         if data is None:
             raise ValueError("Missing kml:ExtendedData element")
@@ -238,17 +267,21 @@ class MOSMIXParser(Parser):
             for row in zip(*records.values(), strict=True)
         )
 
-    def _convert(self, value, converter):
+    def _convert(
+        self,
+        value: str,
+        converter: Callable[[str], Any],
+    ) -> Any:
         try:
             return converter(value)
         except ValueError:
             return None
 
-    def parse_condition(self, value):
+    def parse_condition(self, value: str) -> str | None:
         code = int(value.split('.')[0])
         return synop_current_weather_code_to_condition(code)
 
-    def parse_solar(self, value):
+    def parse_solar(self, value: str) -> float:
         return kj_per_m2_to_j_per_m2(float(value))
 
 
@@ -285,7 +318,7 @@ class SYNOPParser(Parser):
         'totalSunshine': 'sunshine',
     }
 
-    def parse(self, path):
+    def parse(self, path: StrPath) -> Iterator[Record]:
         self.logger.info("Parsing %s", path)
         with bz2.open(path) as f:
             if not f.read(1):
@@ -298,13 +331,13 @@ class SYNOPParser(Parser):
                         self.sanitize_record(record)
                         yield record
 
-    def _get_message_blocks(self, f):
+    def _get_message_blocks(self, f: IO[bytes]) -> Any:
         with suppress(ImportError):
             import ijson
             return ijson.items(f, 'messages.item', use_float=True)
         return json.load(f)['messages']
 
-    def parse_message(self, message):
+    def parse_message(self, message: Any) -> Record:
         record = {
             'observation_type': 'synop',
         }
@@ -316,7 +349,12 @@ class SYNOPParser(Parser):
             raise SkipRecord
         return record
 
-    def parse_tree(self, record, message, base=None):
+    def parse_tree(
+        self,
+        record: Record,
+        message: Any,
+        base: Record | None = None,
+    ) -> None:
         data = {} if base is None else base.copy()
         for block in message:
             if isinstance(block, dict):
@@ -339,7 +377,7 @@ class SYNOPParser(Parser):
             else:
                 self.parse_tree(record, block, base=data)
 
-    def parse_minute(self, record, data, value):
+    def parse_minute(self, record: Record, data: Record, value: Any) -> None:
         parts = ['year', 'month', 'day', 'hour', 'minute']
         if any(data[part] is None for part in parts):
             raise SkipRecord
@@ -347,7 +385,12 @@ class SYNOPParser(Parser):
             data['year'], data['month'], data['day'], data['hour'],
             data['minute'], tzinfo=datetime.timezone.utc)
 
-    def parse_stationNumber(self, record, data, value):
+    def parse_stationNumber(
+        self,
+        record: Record,
+        data: Record,
+        value: Any,
+    ) -> None:
         if data['stationNumber']:
             wmo_id = f"{data['blockNumber']}{data['stationNumber']:03d}"
         elif data.get('shortStationName'):
@@ -358,7 +401,12 @@ class SYNOPParser(Parser):
         record['wmo_station_id'] = wmo_id
         record['dwd_station_id'] = wmo_id_to_dwd(wmo_id)
 
-    def parse_presentWeather(self, record, data, value):
+    def parse_presentWeather(
+        self,
+        record: Record,
+        data: Record,
+        value: Any,
+    ) -> None:
         if record.get('timePeriod'):
             return
         condition = synop_current_weather_code_to_condition(value)
@@ -367,7 +415,12 @@ class SYNOPParser(Parser):
         if condition:
             record['condition'] = condition
 
-    def parse_pastWeather1(self, record, data, value):
+    def parse_pastWeather1(
+        self,
+        record: Record,
+        data: Record,
+        value: Any,
+    ) -> None:
         if value and not record.get('condition'):
             record['condition'] = synop_past_weather_code_to_condition(value)
 
@@ -406,7 +459,14 @@ class CurrentObservationsParser(Parser):
         'wind_gust_speed': kmh_to_ms,
     }
 
-    def parse(self, path, lat=None, lon=None, height=None, station_name=None):
+    def parse(
+        self,
+        path: StrPath,
+        lat: float | None = None,
+        lon: float | None = None,
+        height: float | None = None,
+        station_name: str | None = None,
+    ) -> Iterator[Record]:
         self.logger.info("Parsing %s", path)
         with open(path) as f:
             reader = csv.DictReader(f, delimiter=';')
@@ -426,8 +486,8 @@ class CurrentObservationsParser(Parser):
                     **self.parse_row(row)
                 }
 
-    def parse_row(self, row):
-        record = {
+    def parse_row(self, row: dict[str, str]) -> Record:
+        record: Record = {
             element: (
                 None
                 if row[column] == '---'
@@ -442,7 +502,7 @@ class CurrentObservationsParser(Parser):
         self.sanitize_record(record)
         return record
 
-    def convert_units(self, record):
+    def convert_units(self, record: Record) -> None:
         for element, converter in self.CONVERTERS.items():
             if record[element] is not None:
                 record[element] = converter(record[element])
@@ -450,11 +510,11 @@ class CurrentObservationsParser(Parser):
 
 class ObservationsParser(Parser):
 
-    elements = {}
-    converters = {}
-    ignored_values = {}
+    elements: dict[str, str] = {}
+    converters: dict[str, Callable[[Any], Any]] = {}
+    ignored_values: dict[str, list[str]] = {}
 
-    def parse(self, path, **extra):
+    def parse(self, path: StrPath, **extra: Any) -> Iterator[Record]:
         self.logger.info("Parsing %s", path)
         with zipfile.ZipFile(path) as zf:
             dwd_station_id = self.parse_station_id(zf, **extra)
@@ -472,13 +532,18 @@ class ObservationsParser(Parser):
                     **record
                 }
 
-    def parse_station_id(self, zf, **extra):
+    def parse_station_id(self, zf: zipfile.ZipFile, **extra: Any) -> str:
         for filename in zf.namelist():
             if (m := re.match(r'Metadaten_Geographie_(\d+)\.txt', filename)):
                 return m.group(1)
         raise ValueError(f"Unable to parse station ID for {zf.filename}")
 
-    def parse_lat_lon_history(self, zf, dwd_station_id, **extra):
+    def parse_lat_lon_history(
+        self,
+        zf: zipfile.ZipFile,
+        dwd_station_id: str,
+        **extra: Any,
+    ) -> LatLonHistory:
         with zf.open(f'Metadaten_Geographie_{dwd_station_id}.txt') as f:
             reader = csv.DictReader(
                 io.TextIOWrapper(f, encoding='latin1'),
@@ -495,7 +560,12 @@ class ObservationsParser(Parser):
                     row['Stationsname'])
             return history
 
-    def parse_records(self, zf, lat_lon_history, **extra):
+    def parse_records(
+        self,
+        zf: zipfile.ZipFile,
+        lat_lon_history: LatLonHistory,
+        **extra: Any,
+    ) -> Iterator[Record]:
         product_filenames = [
             fn for fn in zf.namelist() if fn.startswith('produkt_')]
         if len(product_filenames) != 1:
@@ -509,7 +579,12 @@ class ObservationsParser(Parser):
                 delimiter=';')
             yield from self.parse_reader(filename, reader, lat_lon_history)
 
-    def parse_reader(self, filename, reader, lat_lon_history):
+    def parse_reader(
+        self,
+        filename: str,
+        reader: Iterable[dict[str, str]],
+        lat_lon_history: LatLonHistory,
+    ) -> Iterator[Record]:
         for row in reader:
             timestamp = datetime.datetime.strptime(
                 row['MESS_DATUM'],
@@ -531,7 +606,11 @@ class ObservationsParser(Parser):
                 **self.parse_elements(row, lat, lon, height),
             }
 
-    def _station_params(self, timestamp, lat_lon_history):
+    def _station_params(
+        self,
+        timestamp: datetime.datetime,
+        lat_lon_history: LatLonHistory,
+    ) -> tuple[float, float, float, str]:
         info = None
         for date, lat_lon_height_name in lat_lon_history.items():
             if date > timestamp:
@@ -542,7 +621,13 @@ class ObservationsParser(Parser):
                 f"No station metadata for {timestamp.isoformat()}")
         return info
 
-    def parse_elements(self, row, lat, lon, height):
+    def parse_elements(
+        self,
+        row: dict[str, str],
+        lat: float | None,
+        lon: float | None,
+        height: float | None,
+    ) -> Record:
         elements = {
             element: (
                 float(row[element_key])
@@ -557,16 +642,16 @@ class ObservationsParser(Parser):
                 elements[element] = converter(elements[element])
         return elements
 
-    def skip_timestamp(self, timestamp):
+    def skip_timestamp(self, timestamp: datetime.datetime) -> bool:
         return False
 
 
 class TenMinutesObservationsParser(ObservationsParser):
 
-    META_DATA_URL = None
+    META_DATA_URL: str
     TRIGGER_MINUTE = 0
 
-    def get_extra_urls(self, path):
+    def get_extra_urls(self, path: StrPath) -> dict[str, str]:
         with zipfile.ZipFile(path) as zf:
             dwd_station_id = self.parse_station_id(zf)
         return {
@@ -575,13 +660,18 @@ class TenMinutesObservationsParser(ObservationsParser):
             ),
         }
 
-    def parse_station_id(self, zf, **extra):
+    def parse_station_id(self, zf: zipfile.ZipFile, **extra: Any) -> str:
         for filename in zf.namelist():
             if (m := re.match(r'produkt_.*_(\d+)\.txt', filename)):
                 return m.group(1)
         raise ValueError(f"Unable to parse station ID for {zf.filename}")
 
-    def parse_lat_lon_history(self, zf, dwd_station_id, **extra):
+    def parse_lat_lon_history(
+        self,
+        zf: zipfile.ZipFile,
+        dwd_station_id: str,
+        **extra: Any,
+    ) -> LatLonHistory:
         if 'meta_path' not in extra:
             raise ValueError(
                 f"Must supply a `meta_path` keyword argument for "
@@ -590,7 +680,12 @@ class TenMinutesObservationsParser(ObservationsParser):
         with zipfile.ZipFile(extra['meta_path']) as meta_zf:
             return super().parse_lat_lon_history(meta_zf, dwd_station_id)
 
-    def parse_reader(self, filename, reader, lat_lon_history):
+    def parse_reader(
+        self,
+        filename: str,
+        reader: Iterable[dict[str, str]],
+        lat_lon_history: LatLonHistory,
+    ) -> Iterator[Record]:
         hour_values = []
         for row in reader:
             timestamp = datetime.datetime.strptime(
@@ -616,7 +711,13 @@ class TenMinutesObservationsParser(ObservationsParser):
                     timestamp, hour_values, filename, lat_lon_history)
                 hour_values.clear()
 
-    def _make_record(self, timestamp, hour_values, filename, lat_lon_history):
+    def _make_record(
+        self,
+        timestamp: datetime.datetime,
+        hour_values: list[Record],
+        filename: str,
+        lat_lon_history: LatLonHistory,
+    ) -> Record:
         raise NotImplementedError
 
 
@@ -664,7 +765,12 @@ class PrecipitationObservationsParser(ObservationsParser):
         'condition': synop_form_of_precipitation_code_to_condition,
     }
 
-    def parse_reader(self, filename, reader, lat_lon_history):
+    def parse_reader(
+        self,
+        filename: str,
+        reader: Iterable[dict[str, str]],
+        lat_lon_history: LatLonHistory,
+    ) -> Iterator[Record]:
         # XXX: WRTR is missing every third hour, we fill it up from the
         #      previous or next row where sensible
         return super().parse_reader(
@@ -673,7 +779,10 @@ class PrecipitationObservationsParser(ObservationsParser):
             lat_lon_history,
         )
 
-    def with_neighbors(self, it):
+    def with_neighbors(
+        self,
+        it: Iterable[T],
+    ) -> Iterator[tuple[T | None, T, T | None]]:
         """
         'ABCDEF' -> (None, 'A', 'B'), ('A', 'B', 'C'), ..., ('E', 'F', None)
         """
@@ -686,7 +795,12 @@ class PrecipitationObservationsParser(ObservationsParser):
             strict=False,
         )
 
-    def fill_wrtr(self, last_row, row, next_row):
+    def fill_wrtr(
+        self,
+        last_row: dict[str, str] | None,
+        row: dict[str, str],
+        next_row: dict[str, str] | None,
+    ) -> dict[str, str]:
         if row['WRTR'] != '-999':
             pass
         elif row['RS_IND'].strip() == '0':
@@ -736,7 +850,13 @@ class WindGustsObservationsParser(TenMinutesObservationsParser):
         'wind_gust_speed': 'FX_10',
     }
 
-    def _make_record(self, timestamp, hour_values, filename, lat_lon_history):
+    def _make_record(
+        self,
+        timestamp: datetime.datetime,
+        hour_values: list[Record],
+        filename: str,
+        lat_lon_history: LatLonHistory,
+    ) -> Record:
         lat, lon, height, station_name = self._station_params(
             timestamp, lat_lon_history)
         hour_values = [x for x in hour_values if x['wind_gust_speed']]
@@ -780,7 +900,13 @@ class PressureObservationsParser(ObservationsParser):
         'pressure_station': hpa_to_pa,
     }
 
-    def parse_elements(self, row, lat, lon, height):
+    def parse_elements(
+        self,
+        row: dict[str, str],
+        lat: float | None,
+        lon: float | None,
+        height: float | None,
+    ) -> Record:
         elements = super().parse_elements(row, lat, lon, height)
         if (
             not elements['pressure_msl']
@@ -820,7 +946,13 @@ class SolarRadiationObservationsParser(TenMinutesObservationsParser):
         'solar': j_per_cm2_to_j_per_m2,
     }
 
-    def _make_record(self, timestamp, hour_values, filename, lat_lon_history):
+    def _make_record(
+        self,
+        timestamp: datetime.datetime,
+        hour_values: list[Record],
+        filename: str,
+        lat_lon_history: LatLonHistory,
+    ) -> Record:
         lat, lon, height, station_name = self._station_params(
             timestamp, lat_lon_history)
         solar = None
@@ -851,10 +983,10 @@ class RADOLANParser(Parser):
     FIELD_NAME = 'precipitation_5'
 
     @property
-    def data_length(self):
+    def data_length(self) -> int:
         return self.BYTES_PER_PIXEL * self.HEIGHT * self.WIDTH
 
-    def parse(self, path):
+    def parse(self, path: StrPath) -> Iterator[Record]:
         with tarfile.open(path, 'r:bz2') as tar:
             for filename in sorted(tar.getnames()):
                 f = tar.extractfile(filename)
@@ -862,7 +994,7 @@ class RADOLANParser(Parser):
                     continue
                 yield self.parse_single(f)
 
-    def parse_single(self, f):
+    def parse_single(self, f: IO[bytes]) -> Record:
         product, timestamp, offset = self.parse_header(f)
         data = self.parse_data(f)
         return {
@@ -872,7 +1004,10 @@ class RADOLANParser(Parser):
             **data,
         }
 
-    def parse_header(self, f):
+    def parse_header(
+        self,
+        f: IO[bytes],
+    ) -> tuple[str, datetime.datetime, datetime.timedelta]:
         header = ''
         while (ch := f.read(1)) != b'\x03':
             header += ch.decode()
@@ -915,7 +1050,7 @@ class RADOLANParser(Parser):
         offset = datetime.timedelta(minutes=offset_minutes)
         return product, timestamp, offset
 
-    def parse_data(self, f):
+    def parse_data(self, f: IO[bytes]) -> Record:
         buf = f.read()
         if len(buf) != self.data_length:
             raise ValueError(
@@ -933,7 +1068,7 @@ class RADOLANParser(Parser):
             self.FIELD_NAME: self.process_raw_data(raw),
         }
 
-    def process_raw_data(self, raw):
+    def process_raw_data(self, raw: Any) -> list[list[float | None]]:
         multiplier = float('1' + self.PRECISION)
         return [
             [
@@ -953,7 +1088,7 @@ class RadarParser(Parser):
     PRECISION = 3
     FIELD_NAME = 'precipitation_5'
 
-    def parse(self, path):
+    def parse(self, path: StrPath) -> Iterator[Record]:
         with tarfile.open(path, 'r') as tar:
             for filename in sorted(tar.getnames()):
                 f = tar.extractfile(filename)
@@ -961,7 +1096,7 @@ class RadarParser(Parser):
                     continue
                 yield self.parse_single(f)
 
-    def parse_single(self, f):
+    def parse_single(self, f: IO[bytes]) -> Record:
         try:
             import h5py
         except ModuleNotFoundError:
@@ -985,7 +1120,7 @@ class RadarParser(Parser):
             **data,
         }
 
-    def verify_meta(self, f):
+    def verify_meta(self, f: Any) -> None:
         prodname = f['dataset1/what'].attrs['prodname']
         if prodname.decode() != self.PRODUCT_NAME:
             raise ValueError(
@@ -1005,7 +1140,7 @@ class RadarParser(Parser):
                 f"Expected data shape ({self.HEIGHT}, {self.WIDTH}), "
                 f"got {shape}")
 
-    def _parse_ts(self, date_str, time_str):
+    def _parse_ts(self, date_str: bytes, time_str: bytes) -> datetime.datetime:
         return datetime.datetime.strptime(
             (date_str + time_str).decode(),
             '%Y%m%d%H%M%S',
@@ -1013,19 +1148,19 @@ class RadarParser(Parser):
             tzinfo=datetime.timezone.utc,
         )
 
-    def parse_timestamp(self, f):
+    def parse_timestamp(self, f: Any) -> datetime.datetime:
         return self._parse_ts(
             f['what'].attrs['date'],
             f['what'].attrs['time'],
         )
 
-    def parse_data_timestamp(self, f):
+    def parse_data_timestamp(self, f: Any) -> datetime.datetime:
         return self._parse_ts(
             f['dataset1/what'].attrs['enddate'],
             f['dataset1/what'].attrs['endtime'],
         )
 
-    def parse_data(self, f):
+    def parse_data(self, f: Any) -> Record:
         raw = f['dataset1/data1/data'][:]
         nodata = f['dataset1/data1/what'].attrs.get('nodata')
         gain = f['dataset1/data1/what'].attrs.get('gain')
@@ -1034,7 +1169,13 @@ class RadarParser(Parser):
             self.FIELD_NAME: self.process_raw_data(raw, nodata, gain, offset),
         }
 
-    def process_raw_data(self, raw, nodata, gain, offset):
+    def process_raw_data(
+        self,
+        raw: Any,
+        nodata: Any,
+        gain: Any,
+        offset: Any,
+    ) -> Any:
         import numpy as np
         raw = raw.astype(float)
         if nodata is not None:
@@ -1050,9 +1191,10 @@ class RadarParser(Parser):
             raw = raw.round(self.PRECISION)
         return self.serialize(raw)
 
-    def serialize(self, arr):
+    def serialize(self, arr: Any) -> Any:
         import numpy as np
-        return np.where(np.isnan(arr), None, arr).tolist()
+        serialized: Any = np.where(np.isnan(arr), None, arr)
+        return serialized.tolist()
 
 
 class CAPParser(Parser):
@@ -1099,15 +1241,15 @@ class CAPParser(Parser):
         'expires',
     ]
 
-    def parse(self, path):
+    def parse(self, path: StrPath) -> Iterator[Record]:
         self.logger.info("Parsing %s", path)
         with zipfile.ZipFile(path) as zf:
             for info in zf.infolist():
                 with zf.open(info) as f:
                     yield self.parse_event(f)
 
-    def parse_event(self, f):
-        event = {}
+    def parse_event(self, f: IO[bytes]) -> Record:
+        event: Record = {}
         for _, element in ET.iterparse(f):
             if self._is_tag(element, 'cap:info', self.ns):
                 self._parse_info(event, element)
@@ -1123,7 +1265,7 @@ class CAPParser(Parser):
         self.sanitize_event(event)
         return event
 
-    def _parse_info(self, event, element):
+    def _parse_info(self, event: Record, element: ET.Element) -> None:
         lang = self._find_text(element, 'cap:language', self.ns).split('-')[0]
         tag_map = self.TAG_MAP.get(lang, {})
         for tag, field in tag_map.items():
@@ -1139,19 +1281,20 @@ class CAPParser(Parser):
         if 'warn_cell_ids' not in event:
             event['warn_cell_ids'] = list(self._parse_warn_cell_ids(element))
 
-    def _parse_event_code(self, element):
+    def _parse_event_code(self, element: ET.Element) -> int | None:
         for ec_element in element.findall('cap:eventCode', self.ns):
             name = self._find_text(ec_element, 'cap:valueName', self.ns)
             if name == 'II':
                 return int(self._find_text(ec_element, 'cap:value', self.ns))
+        return None
 
-    def _parse_warn_cell_ids(self, element):
+    def _parse_warn_cell_ids(self, element: ET.Element) -> Iterator[int]:
         for gc_element in element.findall('cap:area/cap:geocode', self.ns):
             name = self._find_text(gc_element, 'cap:valueName', self.ns)
             if name == 'WARNCELLID':
                 yield int(self._find_text(gc_element, 'cap:value', self.ns))
 
-    def sanitize_event(self, event):
+    def sanitize_event(self, event: Record) -> None:
         for field in self.TOKEN_FIELDS:
             if event[field] is None:
                 continue
@@ -1164,7 +1307,7 @@ class CAPParser(Parser):
             )
 
 
-def get_parser(filename):
+def get_parser(filename: str) -> type[Parser] | None:
     parsers = {
         r'DE1200_RV': RADOLANParser,
         r'MOSMIX_': MOSMIXParser,
@@ -1186,3 +1329,4 @@ def get_parser(filename):
     for pattern, parser in parsers.items():
         if re.match(pattern, filename):
             return parser
+    return None

@@ -1,6 +1,8 @@
 import datetime
 import tarfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -10,6 +12,7 @@ from dwdparse.parsers import (
     CurrentObservationsParser,
     DewPointObservationsParser,
     MOSMIXParser,
+    Parser,
     PrecipitationObservationsParser,
     PressureObservationsParser,
     RadarParser,
@@ -31,7 +34,7 @@ from .utils import is_subset
 utc = datetime.timezone.utc
 
 
-def test_mosmix_parser(data_dir):
+def test_mosmix_parser(data_dir: Path) -> None:
     records = list(MOSMIXParser().parse(data_dir / 'MOSMIX_L_LATEST.kmz'))
     assert len(records) == 247
     assert records[0] == {
@@ -87,7 +90,7 @@ def test_mosmix_parser(data_dir):
     assert records[2]['precipitation_probability_6h'] == 85.0
 
 
-def test_synop_parser(data_dir):
+def test_synop_parser(data_dir: Path) -> None:
     records = list(SYNOPParser().parse(data_dir / 'synop.json.bz2'))
     assert len(records) == 3
     assert records[0] == {
@@ -135,7 +138,7 @@ def test_synop_parser(data_dir):
     assert records[2]['dwd_station_id'] == '05484'
 
 
-def test_current_observation_parser(data_dir):
+def test_current_observation_parser(data_dir: Path) -> None:
     records = list(
         CurrentObservationsParser().parse(
             data_dir / '10315-BEOB.csv',
@@ -194,7 +197,7 @@ def test_current_observation_parser(data_dir):
     }
 
 
-def test_observations_parser_parses_metadata(data_dir):
+def test_observations_parser_parses_metadata(data_dir: Path) -> None:
     p = WindObservationsParser()
     metadata = {
         'observation_type': 'historical',
@@ -212,14 +215,14 @@ def test_observations_parser_parses_metadata(data_dir):
         assert is_subset(metadata, record)
 
 
-def test_observations_parser_handles_missing_values(data_dir):
+def test_observations_parser_handles_missing_values(data_dir: Path) -> None:
     p = WindObservationsParser()
     records = list(p.parse(data_dir / 'observations_recent_FF_akt.zip'))
     assert records[5]['wind_direction'] == 90
     assert records[5]['wind_speed'] is None
 
 
-def test_observations_parser_handles_ignored_values(data_dir):
+def test_observations_parser_handles_ignored_values(data_dir: Path) -> None:
     p = WindObservationsParser()
     p.ignored_values = {'wind_direction': ['80']}
     records = list(p.parse(data_dir / 'observations_recent_FF_akt.zip'))
@@ -227,7 +230,7 @@ def test_observations_parser_handles_ignored_values(data_dir):
     assert records[0]['wind_speed'] == 1.6
 
 
-def test_observations_parser_handles_location_changes(data_dir):
+def test_observations_parser_handles_location_changes(data_dir: Path) -> None:
     p = WindObservationsParser()
     path = data_dir / 'observations_recent_FF_location_change_akt.zip'
     records = list(p.parse(path))
@@ -237,17 +240,19 @@ def test_observations_parser_handles_location_changes(data_dir):
         {'lat': 50.0, 'lon': 13.0, 'height': 345.0}, records[-1])
 
 
-def test_observations_parser_skip_timestamp(data_dir):
+def test_observations_parser_skip_timestamp(data_dir: Path) -> None:
     p = WindObservationsParser()
     records = list(p.parse(data_dir / 'observations_recent_FF_akt.zip'))
     assert len(records) == 10
-    p.skip_timestamp = lambda ts: ts.year != 2019
+    p.skip_timestamp = (  # type: ignore[method-assign]
+        lambda timestamp: timestamp.year != 2019
+    )
     records = list(p.parse(data_dir / 'observations_recent_FF_akt.zip'))
     assert len(records) == 1
     assert records[0]['timestamp'].year == 2019
 
 
-def test_ten_minutes_observations_parser_extra_urls(data_dir):
+def test_ten_minutes_observations_parser_extra_urls(data_dir: Path) -> None:
     class TestParser(TenMinutesObservationsParser):
         META_DATA_URL = 'test_{dwd_station_id}.zip'
 
@@ -260,7 +265,15 @@ def test_ten_minutes_observations_parser_extra_urls(data_dir):
 
 
 def _test_parser(
-        cls, path, first, last, count=10, first_idx=0, last_idx=-1, **kwargs):
+    cls: type[Parser],
+    path: Path,
+    first: dict[str, Any],
+    last: dict[str, Any],
+    count: int = 10,
+    first_idx: int = 0,
+    last_idx: int = -1,
+    **kwargs: Any,
+) -> None:
     p = cls()
     records = list(p.parse(path, **kwargs))
     first['timestamp'] = datetime.datetime.strptime(
@@ -272,7 +285,7 @@ def _test_parser(
     assert is_subset(last, records[last_idx])
 
 
-def test_cloud_cover_observations_parser(data_dir):
+def test_cloud_cover_observations_parser(data_dir: Path) -> None:
     _test_parser(
         CloudCoverObservationsParser,
         data_dir / 'observations_recent_N_akt.zip',
@@ -281,7 +294,7 @@ def test_cloud_cover_observations_parser(data_dir):
     )
 
 
-def test_dew_point_observations_parser(data_dir):
+def test_dew_point_observations_parser(data_dir: Path) -> None:
     _test_parser(
         DewPointObservationsParser,
         data_dir / 'observations_recent_TD_akt.zip',
@@ -290,7 +303,7 @@ def test_dew_point_observations_parser(data_dir):
     )
 
 
-def test_temperature_observations_parser(data_dir):
+def test_temperature_observations_parser(data_dir: Path) -> None:
     _test_parser(
         TemperatureObservationsParser,
         data_dir / 'observations_recent_TU_akt.zip',
@@ -301,7 +314,7 @@ def test_temperature_observations_parser(data_dir):
     )
 
 
-def test_precipitation_observations_parser(data_dir):
+def test_precipitation_observations_parser(data_dir: Path) -> None:
     _test_parser(
         PrecipitationObservationsParser,
         data_dir / 'observations_recent_RR_akt.zip',
@@ -319,7 +332,7 @@ def test_precipitation_observations_parser(data_dir):
     )
 
 
-def test_precipitation_observations_parser_with_neighbors():
+def test_precipitation_observations_parser_with_neighbors() -> None:
     parser = PrecipitationObservationsParser()
     assert list(parser.with_neighbors('')) == []
     assert list(parser.with_neighbors('A')) == [(None, 'A', None)]
@@ -342,7 +355,7 @@ def test_precipitation_observations_parser_with_neighbors():
     ]
 
 
-def test_visibility_observations_parser(data_dir):
+def test_visibility_observations_parser(data_dir: Path) -> None:
     _test_parser(
         VisibilityObservationsParser,
         data_dir / 'observations_recent_VV_akt.zip',
@@ -351,7 +364,7 @@ def test_visibility_observations_parser(data_dir):
     )
 
 
-def test_wind_observations_parser(data_dir):
+def test_wind_observations_parser(data_dir: Path) -> None:
     _test_parser(
         WindObservationsParser,
         data_dir / 'observations_recent_FF_akt.zip',
@@ -362,7 +375,7 @@ def test_wind_observations_parser(data_dir):
     )
 
 
-def test_wind_gusts_observations_parser(data_dir):
+def test_wind_gusts_observations_parser(data_dir: Path) -> None:
     _test_parser(
         WindGustsObservationsParser,
         data_dir / 'observations_recent_extrema_wind_akt.zip',
@@ -374,7 +387,7 @@ def test_wind_gusts_observations_parser(data_dir):
     )
 
 
-def test_sunshine_observations_parser(data_dir):
+def test_sunshine_observations_parser(data_dir: Path) -> None:
     _test_parser(
         SunshineObservationsParser,
         data_dir / 'observations_recent_SD_akt.zip',
@@ -384,7 +397,7 @@ def test_sunshine_observations_parser(data_dir):
     )
 
 
-def test_pressure_observations_parser(data_dir):
+def test_pressure_observations_parser(data_dir: Path) -> None:
     _test_parser(
         PressureObservationsParser,
         data_dir / 'observations_recent_P0_hist.zip',
@@ -393,7 +406,9 @@ def test_pressure_observations_parser(data_dir):
     )
 
 
-def test_pressure_observations_parser_approximates_pressure_msl(data_dir):
+def test_pressure_observations_parser_approximates_pressure_msl(
+    data_dir: Path,
+) -> None:
     p = PressureObservationsParser()
     records = list(p.parse(data_dir / 'observations_recent_P0_hist.zip'))
     # The actual reduced pressure deleted from the test observation file was
@@ -401,7 +416,7 @@ def test_pressure_observations_parser_approximates_pressure_msl(data_dir):
     assert records[4]['pressure_msl'] == 102260
 
 
-def test_solar_radiation_observations_parser(data_dir):
+def test_solar_radiation_observations_parser(data_dir: Path) -> None:
     _test_parser(
         SolarRadiationObservationsParser,
         data_dir / '10minutenwerte_SOLAR_01766_now.zip',
@@ -412,7 +427,7 @@ def test_solar_radiation_observations_parser(data_dir):
     )
 
 
-def test_radolan_parser(data_dir):
+def test_radolan_parser(data_dir: Path) -> None:
     p = RADOLANParser()
     records = list(p.parse(data_dir / 'DE1200_RV2305081330.tar.bz2'))
     assert len(records) == 2
@@ -444,7 +459,7 @@ def test_radolan_parser(data_dir):
     ]
 
 
-def test_radar_parser(data_dir):
+def test_radar_parser(data_dir: Path) -> None:
     p = RadarParser()
     records = list(p.parse(data_dir / 'composite_rv_20250923_0855.tar'))
     assert len(records) == 2
@@ -476,7 +491,7 @@ def test_radar_parser(data_dir):
     ]
 
 
-def test_cap_parser(data_dir):
+def test_cap_parser(data_dir: Path) -> None:
     p = CAPParser()
     fn = 'Z_CAP_C_EDZW_LATEST_PVW_STATUS_PREMIUMDWD_COMMUNEUNION_MUL.zip'
     records = list(p.parse(data_dir / fn))
@@ -518,7 +533,7 @@ def test_cap_parser(data_dir):
     }
 
 
-def test_cap_parser_test_status(data_dir):
+def test_cap_parser_test_status(data_dir: Path) -> None:
     p = CAPParser()
     fn = 'Z_CAP_with_test.zip'
     records = list(p.parse(data_dir / fn))
@@ -527,7 +542,7 @@ def test_cap_parser_test_status(data_dir):
     assert records[0]['status'] == 'test'
 
 
-def test_get_parser():
+def test_get_parser() -> None:
     synop_with_timestamp = (
         'Z__C_EDZW_20200617114802_bda01,synop_bufr_GER_999999_999999__MW_617'
         '.json.bz2')
@@ -563,11 +578,11 @@ def test_get_parser():
         assert get_parser(filename) is expected_parser
 
 
-def test_get_parser_unknown_filename():
+def test_get_parser_unknown_filename() -> None:
     assert get_parser('totally_unknown_file.dat') is None
 
 
-def test_parse_raises_for_unknown_file():
+def test_parse_raises_for_unknown_file() -> None:
     from dwdparse.api import parse
     with pytest.raises(ValueError, match="No parser found"):
         list(parse('totally_unknown_file.dat'))
@@ -575,7 +590,9 @@ def test_parse_raises_for_unknown_file():
 
 @pytest.mark.parametrize('parser_cls', [
     MOSMIXParser, SYNOPParser, CurrentObservationsParser])
-def test_sanitize_passes_through_in_bounds_values(parser_cls):
+def test_sanitize_passes_through_in_bounds_values(
+    parser_cls: type[Parser],
+) -> None:
     record = {
         'precipitation': 0.0,
         'wind_speed': 0.0,
@@ -597,7 +614,7 @@ def test_sanitize_passes_through_in_bounds_values(parser_cls):
 
 @pytest.mark.parametrize('parser_cls', [
     MOSMIXParser, SYNOPParser, CurrentObservationsParser])
-def test_sanitize_passes_through_none(parser_cls):
+def test_sanitize_passes_through_none(parser_cls: type[Parser]) -> None:
     record = {
         'precipitation': None,
         'wind_speed': None,
@@ -612,7 +629,7 @@ def test_sanitize_passes_through_none(parser_cls):
 
 @pytest.mark.parametrize('parser_cls', [
     MOSMIXParser, SYNOPParser, CurrentObservationsParser])
-def test_sanitize_clamps_negative_values(parser_cls):
+def test_sanitize_clamps_negative_values(parser_cls: type[Parser]) -> None:
     record = {
         'precipitation': -1.0,
         'wind_speed': -0.5,
@@ -630,7 +647,7 @@ def test_sanitize_clamps_negative_values(parser_cls):
 
 @pytest.mark.parametrize('parser_cls', [
     MOSMIXParser, SYNOPParser, CurrentObservationsParser])
-def test_sanitize_clamps_overflow_values(parser_cls):
+def test_sanitize_clamps_overflow_values(parser_cls: type[Parser]) -> None:
     record = {
         'cloud_cover': 110.0,
         'relative_humidity': 105.0,
@@ -647,13 +664,15 @@ def test_sanitize_clamps_overflow_values(parser_cls):
     (-10.0, 350.0),  # negative wraps via modulo
     (360.0, 360.0),  # exactly 360 left alone
 ])
-def test_sanitize_wind_direction_modulo(value, expected):
+def test_sanitize_wind_direction_modulo(value: float, expected: float) -> None:
     record = {'wind_direction': value}
     MOSMIXParser().sanitize_record(record)
     assert record['wind_direction'] == expected
 
 
-def test_pressure_observations_approximation_for_missing(data_dir):
+def test_pressure_observations_approximation_for_missing(
+    data_dir: Path,
+) -> None:
     """pressure_msl == None (DWD's -999 sentinel) is approximated from the
     station-level pressure via the barometric formula."""
     p = PressureObservationsParser()
@@ -664,7 +683,7 @@ def test_pressure_observations_approximation_for_missing(data_dir):
     assert records[0]['pressure_msl'] == 102120
 
 
-def test_pressure_observations_approximation_for_zero():
+def test_pressure_observations_approximation_for_zero() -> None:
     """pressure_msl == 0 is treated as a data error and triggers the same
     barometric approximation as a missing value."""
     p = PressureObservationsParser()
@@ -675,7 +694,7 @@ def test_pressure_observations_approximation_for_zero():
     assert elements['pressure_msl'] > 0
 
 
-def test_pressure_observations_approximation_without_height():
+def test_pressure_observations_approximation_without_height() -> None:
     """Without a station height the barometric formula cannot be evaluated,
     so pressure_msl is left as it is."""
     p = PressureObservationsParser()
@@ -685,7 +704,7 @@ def test_pressure_observations_approximation_without_height():
     assert not elements['pressure_msl']
 
 
-def test_observations_parser_rejects_timestamp_before_metadata():
+def test_observations_parser_rejects_timestamp_before_metadata() -> None:
     p = WindObservationsParser()
     history = {
         datetime.datetime(2020, 1, 1, tzinfo=utc): (50.0, 9.0, 339.5, 'X'),
@@ -694,7 +713,7 @@ def test_observations_parser_rejects_timestamp_before_metadata():
         p._station_params(datetime.datetime(2019, 1, 1, tzinfo=utc), history)
 
 
-def test_radolan_parser_skips_non_file_tar_members(tmp_path):
+def test_radolan_parser_skips_non_file_tar_members(tmp_path: Path) -> None:
     """tarfile.extractfile returns None for members that are not regular
     files, e.g. a directory."""
     archive = tmp_path / 'only_a_directory.tar.bz2'
@@ -705,7 +724,7 @@ def test_radolan_parser_skips_non_file_tar_members(tmp_path):
     assert list(RADOLANParser().parse(archive)) == []
 
 
-def test_sanitize_synop_time_period_fields():
+def test_sanitize_synop_time_period_fields() -> None:
     record = {
         'precipitation_60': -1.0,
         'sunshine_30': 4000,
@@ -727,14 +746,16 @@ MOSMIX_NS = {
 }
 
 
-def _placemark(body=''):
+def _placemark(body: str = '') -> ET.Element:
     return ET.fromstring(
         '<kml:Placemark xmlns:kml="http://www.opengis.net/kml/2.2">'
         f'{body}'
         '</kml:Placemark>')
 
 
-def test_mosmix_parser_skips_station_without_coordinates(caplog):
+def test_mosmix_parser_skips_station_without_coordinates(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     place = _placemark(
         '<kml:name>01049</kml:name>'
         '<kml:description>Test Station</kml:description>')
@@ -743,18 +764,18 @@ def test_mosmix_parser_skips_station_without_coordinates(caplog):
     assert "Ignoring station without coordinates" in caplog.text
 
 
-def test_mosmix_parser_rejects_station_without_name():
+def test_mosmix_parser_rejects_station_without_name() -> None:
     with pytest.raises(ValueError, match="Missing or empty kml:name"):
         MOSMIXParser().parse_station(_placemark(), MOSMIX_NS, [], 'source')
 
 
-def test_mosmix_parser_rejects_station_without_description():
+def test_mosmix_parser_rejects_station_without_description() -> None:
     place = _placemark('<kml:name>01049</kml:name>')
     with pytest.raises(ValueError, match="Missing kml:description"):
         MOSMIXParser().parse_station(place, MOSMIX_NS, [], 'source')
 
 
-def test_mosmix_parser_allows_station_with_empty_description():
+def test_mosmix_parser_allows_station_with_empty_description() -> None:
     place = _placemark(
         '<kml:name>01049</kml:name>'
         '<kml:description/>'
@@ -762,6 +783,8 @@ def test_mosmix_parser_allows_station_with_empty_description():
         '</kml:Point>'
         '<kml:ExtendedData/>')
     records = list(
-        MOSMIXParser().parse_station(place, MOSMIX_NS, [None], 'source'))
+        MOSMIXParser().parse_station(
+            place, MOSMIX_NS, [datetime.datetime(2024, 1, 1, tzinfo=utc)],
+            'source'))
     assert len(records) == 1
     assert records[0]['station_name'] is None

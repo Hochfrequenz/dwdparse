@@ -27,10 +27,26 @@ jobs:
         run: uv run --frozen ruff check .
       - name: Test
         run: uv run --frozen pytest
+  type_check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.14
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: '3.14'
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked --extra all --group type_check
+      - name: Type Check
+        run: |
+          uv run --frozen mypy --show-error-codes dwdparse --strict
+          uv run --frozen mypy --show-error-codes tests --strict
   push-to-pypi:
     name: Push Python Package to PyPI
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, type_check]
     runs-on: ubuntu-latest
     permissions:
       id-token: write

@@ -4,7 +4,7 @@ from dwdparse.units import (
 )
 
 
-def test_synop_current_weather_code_to_condition():
+def test_synop_current_weather_code_to_condition() -> None:
     expected = {
         -1: None,
         0: 'dry',
@@ -28,7 +28,7 @@ def test_synop_current_weather_code_to_condition():
     assert synop_current_weather_code_to_condition(18.0) == 'dry'
 
 
-def test_convert_record():
+def test_convert_record() -> None:
     record = {
         'source_id': 11695,
         'timestamp': '2020-08-18T13:00:00+00:00',

@@ -29,12 +29,23 @@ Tracker = "https://github.com/jdemaeyer/dwdparse/issues/"
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
+type_check = [{ include-group = "dev" }, "mypy==2.3.1"]
 
 [tool.setuptools]
 packages = ["dwdparse"]
 
+[tool.setuptools.package-data]
+dwdparse = ["py.typed"]
+
 [tool.setuptools.dynamic]
 version = { attr = "dwdparse.__version__" }
+
+[tool.mypy]
+disable_error_code = []
+
+[[tool.mypy.overrides]]
+module = ["h5py.*", "ijson.*", "pyfive.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 79
