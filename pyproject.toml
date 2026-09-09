@@ -27,6 +27,9 @@ dwdparse = "dwdparse.cli:main"
 Source = "https://github.com/jdemaeyer/dwdparse/"
 Tracker = "https://github.com/jdemaeyer/dwdparse/issues/"
 
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
 [tool.setuptools]
 packages = ["dwdparse"]
 
