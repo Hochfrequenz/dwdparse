@@ -1,4 +1,5 @@
 import datetime
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -685,3 +686,58 @@ def test_sanitize_synop_time_period_fields():
     assert record['sunshine_30'] == 3600
     assert record['wind_direction_10'] == 355.0
     assert record['wind_speed_60'] == 0
+
+
+MOSMIX_NS = {
+    'kml': 'http://www.opengis.net/kml/2.2',
+    'dwd': (
+        'https://opendata.dwd.de/weather/lib/'
+        'pointforecast_dwd_extension_V1_0.xsd'),
+}
+
+
+def _placemark(body=''):
+    return ET.fromstring(
+        '<kml:Placemark xmlns:kml="http://www.opengis.net/kml/2.2">'
+        f'{body}'
+        '</kml:Placemark>')
+
+
+def test_mosmix_parser_skips_station_without_coordinates(caplog):
+    """The skip used to depend on catching the AttributeError raised by
+    the missing element, so it has to keep working without it."""
+    place = _placemark(
+        '<kml:name>01049</kml:name>'
+        '<kml:description>Test Station</kml:description>')
+    records = MOSMIXParser().parse_station(place, MOSMIX_NS, [], 'source')
+    assert records == []
+    assert "Ignoring station without coordinates" in caplog.text
+
+
+def test_mosmix_parser_rejects_station_without_name():
+    """Used to fail with "'NoneType' object has no attribute 'text'",
+    which did not say which element was missing."""
+    with pytest.raises(ValueError, match="Missing or empty kml:name"):
+        MOSMIXParser().parse_station(_placemark(), MOSMIX_NS, [], 'source')
+
+
+def test_mosmix_parser_rejects_station_without_description():
+    """Same failure as a missing name, from a different element."""
+    place = _placemark('<kml:name>01049</kml:name>')
+    with pytest.raises(ValueError, match="Missing kml:description"):
+        MOSMIXParser().parse_station(place, MOSMIX_NS, [], 'source')
+
+
+def test_mosmix_parser_allows_station_with_empty_description():
+    """An empty description has always yielded a record with no station
+    name, and must not start raising."""
+    place = _placemark(
+        '<kml:name>01049</kml:name>'
+        '<kml:description/>'
+        '<kml:Point><kml:coordinates>9.0,50.0,100.0</kml:coordinates>'
+        '</kml:Point>'
+        '<kml:ExtendedData/>')
+    records = list(
+        MOSMIXParser().parse_station(place, MOSMIX_NS, [None], 'source'))
+    assert len(records) == 1
+    assert records[0]['station_name'] is None
