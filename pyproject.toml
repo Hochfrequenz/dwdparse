@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "dwdparse"
 description = "Parsers for DWD's open weather data."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Jakob de Maeyer", email = "jakob@naboa.de" }]
 classifiers = [
     "Programming Language :: Python :: 3",
