@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from dwdparse.parsers import (
+    _BOUNDED_FIELDS,
     CAPParser,
     CloudCoverObservationsParser,
     CurrentObservationsParser,
@@ -739,6 +740,13 @@ def test_sanitize_synop_time_period_fields() -> None:
     assert record['sunshine_30'] == 3600
     assert record['wind_direction_10'] == 355.0
     assert record['wind_speed_60'] == 0
+
+
+def test_bounded_fields_all_have_a_branch() -> None:
+    """The set gates the ladder, so a name in one and not the other is dead."""
+    record = {field: -1 for field in _BOUNDED_FIELDS}
+    Parser().sanitize_record(record)
+    assert all(value != -1 for value in record.values())
 
 
 MOSMIX_NS = {

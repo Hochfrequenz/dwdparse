@@ -45,6 +45,12 @@ LatLonHistory = dict[
     tuple[float, float, float, str],
 ]
 
+# Fields `_sanitize_value` has bounds for; keep in sync with the ladder there.
+_BOUNDED_FIELDS = {
+    'precipitation', 'wind_speed', 'wind_direction', 'cloud_cover',
+    'relative_humidity', 'sunshine',
+}
+
 
 class SkipRecord(Exception):
     pass
@@ -141,23 +147,26 @@ class Parser:
 
     @staticmethod
     def _sanitize_value(field: str, value: Any) -> Any:
-        # Strip a trailing '_<seconds>' time-period suffix (used by
-        # SYNOPParser, e.g. precipitation_60) so the same rules apply to
-        # both the bare and the suffixed forms.
-        head, _, tail = field.rpartition('_')
-        base = head if head and tail.isdigit() else field
-        if base in ('precipitation', 'wind_speed'):
+        if field not in _BOUNDED_FIELDS:
+            # A trailing '_<seconds>' time period (used by SYNOPParser,
+            # e.g. precipitation_60) gets the same bounds as the bare
+            # field.
+            head, _, tail = field.rpartition('_')
+            if not (tail.isdigit() and head in _BOUNDED_FIELDS):
+                return value
+            field = head
+        if field in ('precipitation', 'wind_speed'):
             if value < 0:
                 return 0
-        elif base == 'wind_direction':
+        elif field == 'wind_direction':
             if value < 0 or value > 360:
                 return value % 360
-        elif base in ('cloud_cover', 'relative_humidity'):
+        elif field in ('cloud_cover', 'relative_humidity'):
             if value < 0:
                 return 0
             if value > 100:
                 return 100
-        elif base == 'sunshine':
+        elif field == 'sunshine':
             if value < 0:
                 return 0
             if value > 3600:
