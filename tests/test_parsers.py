@@ -851,3 +851,10 @@ def test_parser_text_does_not_strip():
     come back as it was."""
     el = ET.fromstring('<value>  1 2 3  </value>')
     assert Parser._text(el, 'value') == '  1 2 3  '
+
+
+def test_parser_parse_accepts_the_extras_api_forwards():
+    """`parse_url` forwards whatever `get_extra_urls` asked for, so the base
+    signature has to admit them even though only some parsers use them."""
+    with pytest.raises(NotImplementedError):
+        Parser().parse('some.zip', meta_path='meta.zip')
