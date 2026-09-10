@@ -211,10 +211,10 @@ class MOSMIXParser(Parser):
                 continue
             values_str = self._find_text(forecast, 'dwd:value', ns)
             converter = getattr(self, f'parse_{column}', float)
-            # XXX: Roughly 50 % of our parsing time is spent here
+            # XXX: Roughly 15 % of our parsing time is spent here
             records[column] = [
                 None if x == '-' else converter(x)
-                for x in re.split(r'\s+', values_str.strip())
+                for x in values_str.split()
             ]
             if len(records[column]) != len(timestamps):
                 raise ValueError(

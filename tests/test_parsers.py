@@ -754,6 +754,22 @@ def test_cap_parser_skips_event_code_with_empty_value_name():
     assert CAPParser()._parse_event_code(info) == 42
 
 
+def test_mosmix_parser_rejects_blank_value():
+    """`.split()` on a blank value would yield no values at all, so the
+    guard is what keeps the count check meaningful."""
+    place = _placemark(
+        '<kml:name>01049</kml:name>'
+        '<kml:description>Test Station</kml:description>'
+        '<kml:Point><kml:coordinates>9.0,50.0,100.0</kml:coordinates>'
+        '</kml:Point>'
+        '<kml:ExtendedData>'
+        f'<dwd:Forecast xmlns:dwd="{MOSMIX_NS["dwd"]}"'
+        f' dwd:elementName="TTT"><dwd:value>  </dwd:value></dwd:Forecast>'
+        '</kml:ExtendedData>')
+    with pytest.raises(ValueError, match="Empty dwd:value element"):
+        MOSMIXParser().parse_station(place, MOSMIX_NS, [None], 'source')
+
+
 def test_mosmix_parser_rejects_empty_timestamp():
     """Used to fail inside re.sub, which will not take a None."""
     steps = ET.fromstring(
