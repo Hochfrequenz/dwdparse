@@ -742,6 +742,23 @@ def test_sanitize_synop_time_period_fields() -> None:
     assert record['wind_speed_60'] == 0
 
 
+def test_sanitize_record_skips_only_untouched_fields() -> None:
+    """The guard in `sanitize_record` must not skip a field that
+    `_sanitize_value` would have changed."""
+    fields = [
+        *_BOUNDED_FIELDS,
+        *(f'{field}_60' for field in _BOUNDED_FIELDS),
+        'temperature', 'timestamp', 'wind_gust_speed_60',
+        'precipitation_probability_6h', 'precipitation_', 'sunshine_٣',
+        '', '_',
+    ]
+    for field in fields:
+        for value in (-1, 5000):
+            record = {field: value}
+            Parser().sanitize_record(record)
+            assert record[field] == Parser._sanitize_value(field, value)
+
+
 def test_bounded_fields_all_have_a_branch() -> None:
     """The set gates the ladder, so a name in one and not the other is dead."""
     record = {field: -1 for field in _BOUNDED_FIELDS}

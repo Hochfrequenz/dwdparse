@@ -130,6 +130,12 @@ class Parser:
         for field, value in record.items():
             if value is None:
                 continue
+            # `_sanitize_value` has bounds only for the fields in the
+            # set and for those a '_<seconds>' time period maps onto one,
+            # and such a suffix ends in a digit, so this cannot skip a
+            # field it would have changed.
+            if field not in _BOUNDED_FIELDS and not field[-1:].isdigit():
+                continue
             fixed = self._sanitize_value(field, value)
             if fixed != value:
                 self.logger.warning(
