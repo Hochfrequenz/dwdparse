@@ -1,4 +1,5 @@
 import datetime
+import io
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -9,6 +10,7 @@ from dwdparse.parsers import (
     CurrentObservationsParser,
     DewPointObservationsParser,
     MOSMIXParser,
+    Parser,
     PrecipitationObservationsParser,
     PressureObservationsParser,
     RadarParser,
@@ -750,3 +752,69 @@ def test_cap_parser_skips_event_code_with_empty_value_name():
         '<eventCode><valueName>II</valueName><value>42</value></eventCode>'
         '</info>')
     assert CAPParser()._parse_event_code(info) == 42
+
+
+def test_mosmix_parser_rejects_empty_timestamp():
+    """Used to fail inside re.sub, which will not take a None."""
+    steps = ET.fromstring(
+        '<TimeSteps xmlns:dwd="{}"><dwd:TimeStep/></TimeSteps>'.format(
+            MOSMIX_NS['dwd']))
+    with pytest.raises(ValueError, match="Empty dwd:TimeStep element"):
+        MOSMIXParser().parse_timestamps(steps, MOSMIX_NS)
+
+
+def test_cap_parser_rejects_empty_event_code_value():
+    """Used to fail with int(None). An empty valueName is still skipped,
+    but an empty value under the name we want is not recoverable."""
+    ns = 'urn:oasis:names:tc:emergency:cap:1.2'
+    info = ET.fromstring(
+        f'<info xmlns="{ns}"><eventCode>'
+        '<valueName>II</valueName><value/></eventCode></info>')
+    with pytest.raises(ValueError, match="Empty cap:value element"):
+        CAPParser()._parse_event_code(info)
+
+
+def test_cap_parser_rejects_blank_event_code_value():
+    """Whitespace-only text used to fail anonymously inside int()."""
+    ns = 'urn:oasis:names:tc:emergency:cap:1.2'
+    info = ET.fromstring(
+        f'<info xmlns="{ns}"><eventCode>'
+        '<valueName>II</valueName><value>   </value></eventCode></info>')
+    with pytest.raises(ValueError, match="Empty cap:value element"):
+        CAPParser()._parse_event_code(info)
+
+
+def test_mosmix_parser_rejects_empty_product_id():
+    """An empty ProductID used to leave source unset, so the next element
+    reported "Unexpected issue time w/o ID" and blamed the wrong one."""
+    kmz = (
+        '<kml:kml xmlns:kml="{kml}" xmlns:dwd="{dwd}">'
+        '<dwd:ProductID/><dwd:IssueTime>2024-01-01T00:00:00Z</dwd:IssueTime>'
+        '</kml:kml>').format(**MOSMIX_NS)
+    with pytest.raises(ValueError, match="Empty dwd:ProductID element"):
+        list(MOSMIXParser()._parse_stream(io.BytesIO(kmz.encode())))
+
+
+def test_mosmix_parser_rejects_empty_issue_time():
+    """Used to fail on str concatenation with a None."""
+    kmz = (
+        '<kml:kml xmlns:kml="{kml}" xmlns:dwd="{dwd}">'
+        '<dwd:ProductID>P</dwd:ProductID><dwd:IssueTime/>'
+        '</kml:kml>').format(**MOSMIX_NS)
+    with pytest.raises(ValueError, match="Empty dwd:IssueTime element"):
+        list(MOSMIXParser()._parse_stream(io.BytesIO(kmz.encode())))
+
+
+def test_cap_parser_rejects_empty_language():
+    """Used to fail on str.split with a None."""
+    ns = 'urn:oasis:names:tc:emergency:cap:1.2'
+    info = ET.fromstring(f'<info xmlns="{ns}"><language/></info>')
+    with pytest.raises(ValueError, match="Empty cap:language element"):
+        CAPParser()._parse_info({}, info)
+
+
+def test_parser_text_does_not_strip():
+    """dwd:value is a padded, whitespace-separated list, so the text has to
+    come back as it was."""
+    el = ET.fromstring('<value>  1 2 3  </value>')
+    assert Parser._text(el, 'value') == '  1 2 3  '
