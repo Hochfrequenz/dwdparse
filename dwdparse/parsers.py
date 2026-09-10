@@ -118,7 +118,9 @@ class Parser:
     @staticmethod
     def _iso_z_to_utc(timestamp_str: str) -> str:
         # `datetime.fromisoformat` rejected `Z` before Python 3.11.
-        return re.sub(r'Z$', '+00:00', timestamp_str)
+        if timestamp_str.endswith('Z'):
+            return timestamp_str[:-1] + '+00:00'
+        return timestamp_str
 
     def sanitize_record(self, record: Record) -> None:
         for field, value in record.items():
@@ -139,13 +141,19 @@ class Parser:
             self.sanitize_record(record)
             yield record
 
+    _BASE_FIELDS: dict[str, str] = {}
+
     @staticmethod
     def _sanitize_value(field: str, value: Any) -> Any:
         # Strip a trailing '_<seconds>' time-period suffix (used by
         # SYNOPParser, e.g. precipitation_60) so the same rules apply to
-        # both the bare and the suffixed forms.
-        head, _, tail = field.rpartition('_')
-        base = head if head and tail.isdigit() else field
+        # both the bare and the suffixed forms. A handful of field names
+        # recur for every record, so keep the stripped form.
+        base = Parser._BASE_FIELDS.get(field)
+        if base is None:
+            head, _, tail = field.rpartition('_')
+            base = head if head and tail.isdigit() else field
+            Parser._BASE_FIELDS[field] = base
         if base in ('precipitation', 'wind_speed'):
             if value < 0:
                 return 0
@@ -271,10 +279,9 @@ class MOSMIXParser(Parser):
                 continue
             values_str = self._find_text(forecast, 'dwd:value', ns)
             converter = getattr(self, f'parse_{column}', float)
-            # XXX: Roughly 50 % of our parsing time is spent here
             records[column] = [
                 None if x == '-' else converter(x)
-                for x in re.split(r'\s+', values_str.strip())
+                for x in values_str.split()
             ]
             if len(records[column]) != len(timestamps):
                 raise ValueError(
